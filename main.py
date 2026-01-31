@@ -86,10 +86,10 @@ def create_pulumi_program():
     # STEP 3: Update Dynamic DNS AFTER service starts
     ddns_update = DynamicDnsUpdate(
         "ddns-update",
-        hostname=os.getenv("HOSTNAME", "tetranet.ddns.net"),
+        hostname=config.noip_hostname,
         ip_address=ecs_service_manager.public_ip,
-        username=os.getenv("NOIP_USERNAME"),
-        password=os.getenv("NOIP_PASSWORD"),
+        username=config.noip_username,
+        password=config.noip_password,
         opts=pulumi.ResourceOptions(
             depends_on=[ecs_service_manager]  # Wait for service to get public IP
         )

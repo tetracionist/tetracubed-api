@@ -26,6 +26,8 @@ class Config:
         self.minecraft_version = self.config.get("minecraft_version")
         self.minecraft_motd = self.config.get("minecraft_motd") or "Hello There!"
         self.minecraft_max_players= self.config.get("minecraft_max_players") or 20
-
+        self.noip_username = self.config.require_secret("noip_username")
+        self.noip_password = self.config.require_secret("noip_password")
+        self.noip_hostname = self.config.require_secret("noip_hostname")
 
 config = Config()
