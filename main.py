@@ -240,26 +240,18 @@ async def tetracubed_start(current_user: str = Depends(get_current_user)):
         logger.info(f"✓ Using Pulumi ESC environment(s): {environments}")
 
         # OPTIONAL: Override ESC config with environment variables
-        # ESC is REQUIRED as the base config source (validated above)
-        # Environment variables here allow runtime overrides for testing/debugging
-        # This is optional - remove this section if you want pure ESC with no overrides
+        # ESC provides all required secrets:
+        #   - tetracubed-api:s3_bucket_name
+        #   - tetracubed-api:datasync_s3_bucket_access_role
+        #   - tetracubed-api:ops_list
+        # These environment variable overrides are OPTIONAL (only for local testing)
         config_values = {}
 
-        # AWS region
+        # AWS region override (optional - ESC may already provide this)
         if "AWS_DEFAULT_REGION" in os.environ:
             stack.set_config("aws:region", auto.ConfigValue(os.environ["AWS_DEFAULT_REGION"]))
 
-        # Required secrets (must be set either in Pulumi config or environment)
-        if "S3_BUCKET_NAME" in os.environ:
-            config_values["s3_bucket_name"] = auto.ConfigValue(os.environ["S3_BUCKET_NAME"], secret=True)
-
-        if "DATASYNC_S3_BUCKET_ACCESS_ROLE" in os.environ:
-            config_values["datasync_s3_bucket_access_role"] = auto.ConfigValue(os.environ["DATASYNC_S3_BUCKET_ACCESS_ROLE"], secret=True)
-
-        if "OPS_LIST" in os.environ:
-            config_values["ops_list"] = auto.ConfigValue(os.environ["OPS_LIST"], secret=True)
-
-        # Optional overrides for non-secret values
+        # Optional overrides for non-secret values (only if you want to override ESC)
         if "VPC_CIDR" in os.environ:
             config_values["vpc_cidr"] = auto.ConfigValue(os.environ["VPC_CIDR"])
 

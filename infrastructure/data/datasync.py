@@ -29,9 +29,12 @@ class DataSyncComponent(ComponentResource):
             s3_config={
                 "bucket_access_role_arn": pulumi.Output.all(
                     role_template=config.datasync_s3_bucket_access_role,
-                    account_id=self.account_id
+                    account_id=self.account_id,
+                    bucket_name=config.s3_bucket_name
                 ).apply(
-                    lambda args: args["role_template"].replace("{account_id}", args["account_id"])
+                    lambda args: args["role_template"]
+                        .replace("{account_id}", args["account_id"])
+                        .replace("{bucket_name}", args["bucket_name"])
                 ),
             },
             s3_storage_class="STANDARD",
