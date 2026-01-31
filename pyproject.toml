@@ -1,0 +1,18 @@
+[project]
+name = "tetracubed-api"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "boto3>=1.40.7",
+    "fastapi[all]>=0.116.1",
+    "loguru>=0.7.3",
+    "pulumi>=3.0.0,<4.0.0",
+    "pulumi-aws>=7.0.0,<8.0.0",
+    "pwdlib[argon2]>=0.2.1",
+    "pyjwt>=2.10.1",
+    "python-dotenv>=1.0.0",
+    "requests>=2.32.4",
+    "uvicorn>=0.35.0",
+]

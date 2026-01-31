@@ -1,0 +1,6 @@
+name: tetracubed-api
+runtime:
+  name: python
+  options:
+    toolchain: uv
+description: Tetracubed Minecraft server infrastructure
