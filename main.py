@@ -278,6 +278,9 @@ async def tetracubed_start(current_user: str = Depends(get_current_user)):
 
         if "MODRINTH_PROJECTS" in os.environ:
             config_values["modrinth_projects"] = auto.ConfigValue(os.environ["MODRINTH_PROJECTS"])
+        
+        if "OPS_LIST" in os.environ:
+            config_values["ops_list"] = auto.ConfigValue(os.environ["OPS_LIST"], secret=True)
 
         # Only set config values if there are any overrides
         if config_values:
