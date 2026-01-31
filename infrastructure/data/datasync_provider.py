@@ -91,12 +91,18 @@ class DataSyncExecutionProvider(ResourceProvider):
         task_arn = props["task_arn"]
         task_name = props.get("task_name", "datasync-task")
         run_on_create = props.get("run_on_create", True)
+        run_on_delete = props.get("run_on_delete", False)
 
         if not run_on_create:
             logger.info(f"Skipping execution on create for: {task_name}")
             return CreateResult(
                 id_=f"{task_name}-skipped",
-                outs={"task_arn": task_arn, "status": "SKIPPED"}
+                outs={
+                    "task_arn": task_arn,
+                    "task_name": task_name,
+                    "run_on_delete": run_on_delete,  # Store for delete
+                    "status": "SKIPPED"
+                }
             )
 
         task_execution_arn = self._execute_task(task_arn, task_name, "CREATE")
@@ -106,6 +112,8 @@ class DataSyncExecutionProvider(ResourceProvider):
             outs={
                 "task_execution_arn": task_execution_arn,
                 "task_arn": task_arn,
+                "task_name": task_name,
+                "run_on_delete": run_on_delete,  # Store for delete
                 "status": "SUCCESS"
             }
         )
@@ -115,12 +123,18 @@ class DataSyncExecutionProvider(ResourceProvider):
         Executes DataSync task during 'pulumi destroy'.
         Use this for EFS -> S3 (save data before infrastructure is destroyed).
         """
-        task_arn = props["task_arn"]
+        # During delete, props might only contain outputs, not inputs
+        # Check for both input and output property names
+        task_arn = props.get("task_arn") or props.get("task_execution_arn")
         task_name = props.get("task_name", "datasync-task")
         run_on_delete = props.get("run_on_delete", False)
 
         if not run_on_delete:
             logger.info(f"Skipping execution on delete for: {task_name}")
+            return
+
+        if not task_arn:
+            logger.warning(f"No task ARN found in props during delete, skipping execution")
             return
 
         self._execute_task(task_arn, task_name, "DELETE")
@@ -130,12 +144,30 @@ class DataSyncExecution(Resource):
     """
     Pulumi custom resource for DataSync task execution.
 
-    Usage:
+    Args:
+        task_arn: The ARN of the DataSync task to execute
+        task_name: Friendly name for logging
+        run_on_create: Execute task during 'pulumi up' (default: True)
+        run_on_delete: Execute task during 'pulumi destroy' (default: False)
+
+    Example - S3 to EFS (load data on create):
         s3_to_efs_execution = DataSyncExecution(
-            "s3-to-efs-execution",
+            "s3-to-efs",
             task_arn=datasync.s3_to_efs_task.arn,
-            task_name="s3-to-efs",
-            opts=pulumi.ResourceOptions(depends_on=[datasync])
+            task_name="Load world from S3 to EFS",
+            run_on_create=True,   # Run during pulumi up
+            run_on_delete=False,  # Don't run during pulumi destroy
+            opts=pulumi.ResourceOptions(depends_on=[datasync.s3_to_efs_task])
+        )
+
+    Example - EFS to S3 (save data on destroy):
+        efs_to_s3_execution = DataSyncExecution(
+            "efs-to-s3",
+            task_arn=datasync.efs_to_s3_task.arn,
+            task_name="Save world from EFS to S3",
+            run_on_create=False,  # Don't run during pulumi up
+            run_on_delete=True,   # Run during pulumi destroy
+            opts=pulumi.ResourceOptions(depends_on=[datasync.efs_to_s3_task])
         )
     """
 
@@ -147,16 +179,20 @@ class DataSyncExecution(Resource):
         name: str,
         task_arn: pulumi.Input[str],
         task_name: Optional[str] = None,
+        run_on_create: bool = True,
+        run_on_delete: bool = False,
         opts: Optional[pulumi.ResourceOptions] = None
     ):
-        full_args = {
-            "task_arn": task_arn,
-            "task_name": task_name or name,
-        }
-
         super().__init__(
             DataSyncExecutionProvider(),
             name,
-            full_args,
+            {
+                "task_arn": task_arn,
+                "task_name": task_name or name,
+                "run_on_create": run_on_create,
+                "run_on_delete": run_on_delete,
+                "task_execution_arn": None,  # Will be populated by provider
+                "status": None,
+            },
             opts
         )

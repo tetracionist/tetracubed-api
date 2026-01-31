@@ -1,10 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from loguru import logger
-from datasync import execute_datasync_task
-from ecs_service import start_ecs_service, stop_ecs_service
 from pathlib import Path
 from typing import Annotated
-from update_hostname_ip import update_dynamic_dns
 from datetime import datetime, timedelta, timezone
 import jwt
 from jwt.exceptions import InvalidTokenError
@@ -48,12 +45,16 @@ class UserInDB(User):
 
 def create_pulumi_program():
     import pulumi
+    import os
     from config.config import config
     from infrastructure.networking.vpc import VpcComponent
     from infrastructure.networking.security_groups import SecurityGroupsComponent
     from infrastructure.storage.efs import EfsComponent
     from infrastructure.ecs.ecs import EcsComponent
     from infrastructure.data.datasync import DataSyncComponent
+    from infrastructure.data.datasync_provider import DataSyncExecution
+    from infrastructure.ecs.ecs_service_provider import EcsServiceManager
+    from infrastructure.dns.ddns_provider import DynamicDnsUpdate
 
     # Create infrastructure components
     vpc = VpcComponent("main", config)
@@ -62,11 +63,56 @@ def create_pulumi_program():
     ecs = EcsComponent("main", config, vpc, security_groups, efs)
     datasync = DataSyncComponent("main", config, vpc, security_groups, efs)
 
+    # STEP 1: S3 -> EFS - Load world data after infrastructure is created
+    s3_to_efs_execution = DataSyncExecution(
+        "s3-to-efs-auto",
+        task_arn=datasync.s3_to_efs_task.arn,
+        task_name="S3 to EFS (load world data)",
+        run_on_create=True,   # Execute during 'pulumi up'
+        run_on_delete=False,  # Skip during 'pulumi destroy'
+        opts=pulumi.ResourceOptions(depends_on=[datasync.s3_to_efs_task])
+    )
+
+    # STEP 2: Start ECS service AFTER data is loaded
+    ecs_service_manager = EcsServiceManager(
+        "ecs-service-manager",
+        cluster_name=ecs.cluster.name,
+        service_name=ecs.service.name,
+        opts=pulumi.ResourceOptions(
+            depends_on=[s3_to_efs_execution]  # Wait for data to be loaded
+        )
+    )
+
+    # STEP 3: Update Dynamic DNS AFTER service starts
+    ddns_update = DynamicDnsUpdate(
+        "ddns-update",
+        hostname=os.getenv("HOSTNAME", "tetranet.ddns.net"),
+        ip_address=ecs_service_manager.public_ip,
+        username=os.getenv("NOIP_USERNAME"),
+        password=os.getenv("NOIP_PASSWORD"),
+        opts=pulumi.ResourceOptions(
+            depends_on=[ecs_service_manager]  # Wait for service to get public IP
+        )
+    )
+
+    # STEP 4 (during destroy): EFS -> S3 - Save world data BEFORE destroying infrastructure
+    # This runs during 'pulumi destroy' AFTER the service is stopped (delete order is reverse)
+    efs_to_s3_execution = DataSyncExecution(
+        "efs-to-s3-auto",
+        task_arn=datasync.efs_to_s3_task.arn,
+        task_name="EFS to S3 (save world data)",
+        run_on_create=False,  # Skip during 'pulumi up'
+        run_on_delete=True,   # Execute during 'pulumi destroy'
+        opts=pulumi.ResourceOptions(depends_on=[datasync.efs_to_s3_task])
+    )
+
     # Export outputs
     pulumi.export("efs_to_s3_task_arn", datasync.efs_to_s3_task.arn)
     pulumi.export("s3_to_efs_task_arn", datasync.s3_to_efs_task.arn)
     pulumi.export("ecs_cluster_name", ecs.cluster.name)
     pulumi.export("ecs_service_name", ecs.service.name)
+    pulumi.export("public_ip", ecs_service_manager.public_ip)
+    pulumi.export("hostname", ddns_update.hostname)
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -254,20 +300,19 @@ async def tetracubed_start(current_user: str = Depends(get_current_user)):
         outputs = stack.outputs()
         logger.info(f"Stack outputs: {outputs}")
 
-        await notify_async("Loading World File & Plugin Config From S3 To EFS...")
+        # Everything executed automatically during pulumi up:
+        # 1. ✓ World data loaded from S3 to EFS
+        # 2. ✓ ECS service started
+        # 3. ✓ DNS updated
+        public_ip = outputs["public_ip"].value
+        hostname = outputs["hostname"].value
 
-        execute_datasync_task(outputs["s3_to_efs_task_arn"].value)
+        logger.info(f"✓ World data loaded from S3 to EFS")
+        logger.info(f"✓ ECS service started")
+        logger.info(f"✓ Public IP: {public_ip}")
+        logger.info(f"✓ DNS updated: {hostname} -> {public_ip}")
 
-        logger.info(f"Spinning up task for service: {outputs['ecs_service_name'].value}")
-        await notify_async("Spinning Up ECS Compute Task...")
-        public_ip = start_ecs_service(
-            outputs["ecs_cluster_name"].value, outputs["ecs_service_name"].value
-        )
-
-        await notify_async(f"Assigning Public IP: {public_ip} to tetranet.ddns.net")
-        update_dynamic_dns(ecs_ip=public_ip)
-
-        await notify_async("Tetracubed Has Been Successfully Provisioned!")
+        await notify_async(f"Tetracubed Has Been Successfully Provisioned!\n{hostname} -> {public_ip}")
 
         return {"message": "Tetracubed server started successfully", "public_ip": public_ip}
 
@@ -289,22 +334,15 @@ async def tetracubed_stop(current_user: str = Depends(get_current_user)):
     await notify_async("Deprovisioning Tetracubed Server...")
     try:
         # Select existing stack using local program
-        workspace = auto.LocalWorkspace(work_dir=work_dir)
-        stack = workspace.select_stack(stack_name=stack_name)
+        stack = auto.create_or_select_stack(stack_name=stack_name, project_name="tetracubed-api", program=create_pulumi_program, work_dir=work_dir)
+        stack.add_environments("tetracubed-api/dev")
 
-        outputs = stack.outputs()
+        await notify_async("Destroying Infrastructure (ECS will stop, then data will be saved)...")
 
-        logger.info(f"Spinning down task for service: {outputs['ecs_service_name'].value}")
-        stop_ecs_service(
-            outputs["ecs_cluster_name"].value, outputs["ecs_service_name"].value
-        )
-
-        await notify_async("Saving World File & Plugin Config From EFS To S3...")
-
-        execute_datasync_task(outputs["efs_to_s3_task_arn"].value)
-
-        await notify_async("Destroying Infrastructure...")
-
+        # During pulumi destroy:
+        # 1. ECS service stops automatically (desired count -> 0)
+        # 2. DataSync EFS->S3 saves world data
+        # 3. Infrastructure is destroyed
         destroy_res = stack.destroy(on_output=print)
 
         logger.info(f"Stack destroyed. Summary: {destroy_res.summary}")
@@ -324,8 +362,8 @@ def show_resources(current_user: str = Depends(get_current_user)):
     """Shows All Tetracubed Resources"""
     try:
         # Select stack using local program
-        workspace = auto.LocalWorkspace(work_dir=work_dir)
-        stack = workspace.select_stack(stack_name=stack_name)
+        stack = auto.create_or_select_stack(stack_name=stack_name, project_name="tetracubed-api", program=create_pulumi_program, work_dir=work_dir)
+        stack.add_environments("tetracubed-api/dev")
 
         outputs = stack.outputs()
 
