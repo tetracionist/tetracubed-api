@@ -140,7 +140,8 @@ class EcsComponent(ComponentResource):
             }],
             opts=ResourceOptions(
                 depends_on=[efs_component.efs_mount_target],
-                parent=self
+                parent=self,
+                replace_on_changes=["containerDefinitions"]
             ),
         )
 
