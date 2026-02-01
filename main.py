@@ -10,7 +10,6 @@ from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from pydantic import BaseModel
 import json
 import requests
-from discord_notifier import notify_async
 
 from pwdlib import PasswordHash
 from pulumi import automation as auto
@@ -211,9 +210,6 @@ async def tetracubed_start(current_user: str = Depends(get_current_user)):
     """
     Starts the Tetracubed Server
     """
-
-    await notify_async("Provisioning Tetracubed Server...")
-
     try:
         # Create workspace using local program (__main__.py)
         stack = auto.create_or_select_stack(stack_name=stack_name, project_name="tetracubed-api", program=create_pulumi_program, work_dir=work_dir)
@@ -231,7 +227,6 @@ async def tetracubed_start(current_user: str = Depends(get_current_user)):
                 f"See PULUMI_ESC_SETUP.md for instructions."
             )
             logger.error(error_msg)
-            await notify_async(f"❌ Provisioning failed: ESC not configured")
             raise HTTPException(
                 status_code=500,
                 detail=error_msg
@@ -307,13 +302,10 @@ async def tetracubed_start(current_user: str = Depends(get_current_user)):
         logger.info(f"✓ Public IP: {public_ip}")
         logger.info(f"✓ DNS updated: {hostname} -> {public_ip}")
 
-        await notify_async(f"Tetracubed Has Been Successfully Provisioned!\n{hostname} -> {public_ip}")
-
         return {"message": "Tetracubed server started successfully", "public_ip": public_ip}
 
     except Exception as e:
-        logger.exception(f"Failed to provision: {e}")  # Changed to .exception() for full traceback
-        await notify_async(f"Failed To Provision Exception: {e}")
+        logger.exception(f"Failed to provision: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
     
@@ -325,14 +317,10 @@ async def tetracubed_stop(current_user: str = Depends(get_current_user)):
     """
     Stops the Tetracubed Server
     """
-
-    await notify_async("Deprovisioning Tetracubed Server...")
     try:
         # Select existing stack using local program
         stack = auto.create_or_select_stack(stack_name=stack_name, project_name="tetracubed-api", program=create_pulumi_program, work_dir=work_dir)
         stack.add_environments("tetracubed-api/dev")
-
-        await notify_async("Destroying Infrastructure (ECS will stop, then data will be saved)...")
 
         # During pulumi destroy:
         # 1. ECS service stops automatically (desired count -> 0)
@@ -342,13 +330,10 @@ async def tetracubed_stop(current_user: str = Depends(get_current_user)):
 
         logger.info(f"Stack destroyed. Summary: {destroy_res.summary}")
 
-        await notify_async("Tetracubed Has Been Successfully Deprovisioned!")
-
         return {"message": "Tetracubed server stopped successfully"}
 
     except Exception as e:
-        logger.exception(f"Failed to deprovision: {e}")  # Changed to .exception() for full traceback
-        await notify_async(f"Failed To Deprovision Exception: {e}")
+        logger.exception(f"Failed to deprovision: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
