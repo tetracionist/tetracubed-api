@@ -1,0 +1,20 @@
+[Unit]
+Description=Tetracubed API (FastAPI + Pulumi Automation)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/tetracubed-api
+EnvironmentFile=/home/ubuntu/tetracubed-api/.env
+Environment=PATH=/home/ubuntu/.local/bin:/home/ubuntu/.pulumi/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/ubuntu/.local/bin/uv run uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tetracubed-api
+
+[Install]
+WantedBy=multi-user.target

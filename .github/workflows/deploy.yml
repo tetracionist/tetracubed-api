@@ -1,0 +1,85 @@
+name: Deploy Tetracubed API
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to server
+        env:
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          REMOTE_DIR: ${{ secrets.REMOTE_DIR || '/home/ubuntu/tetracubed-api' }}
+          USERS_DB: ${{ secrets.USERS_DB }}
+          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+          PULUMI_STACK_NAME: ${{ secrets.PULUMI_STACK_NAME || 'dev' }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'eu-west-2' }}
+        run: |
+          # Set up SSH key
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+
+          # Sync files
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            --exclude '.venv' \
+            --exclude '__pycache__' \
+            --exclude '.env' \
+            --exclude '.git' \
+            --exclude '.claude' \
+            --exclude '.github' \
+            --exclude '.pytest_cache' \
+            --exclude '.ruff_cache' \
+            --exclude '.mypy_cache' \
+            ./ "$SSH_USER@$SSH_HOST:$REMOTE_DIR/"
+
+          # Write .env on server from GitHub secrets
+          # Quote each value so JSON / special chars in USERS_DB survive
+          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "cat > $REMOTE_DIR/.env" <<EOF
+USERS_DB=$USERS_DB
+JWT_SECRET_KEY=$JWT_SECRET_KEY
+PULUMI_ACCESS_TOKEN=$PULUMI_ACCESS_TOKEN
+PULUMI_STACK_NAME=$PULUMI_STACK_NAME
+AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION
+EOF
+
+          # Install systemd unit (in case it changed), sync deps, restart
+          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" bash -s <<'REMOTE'
+            set -e
+            cd /home/ubuntu/tetracubed-api
+            if ! cmp -s tetracubed-api.service /etc/systemd/system/tetracubed-api.service 2>/dev/null; then
+              sudo cp tetracubed-api.service /etc/systemd/system/tetracubed-api.service
+              sudo systemctl daemon-reload
+            fi
+            /home/ubuntu/.local/bin/uv sync --frozen
+            sudo systemctl restart tetracubed-api
+          REMOTE
+
+      - name: Show startup logs
+        env:
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" \
+            "sudo journalctl -u tetracubed-api --since '6 minutes ago' --no-pager"
