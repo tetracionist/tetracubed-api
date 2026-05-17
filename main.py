@@ -44,7 +44,6 @@ class UserInDB(User):
 
 def create_pulumi_program():
     import pulumi
-    import pulumi_aws as aws
     import os
     from config.config import config
     from infrastructure.networking.vpc import VpcComponent
@@ -55,11 +54,6 @@ def create_pulumi_program():
     from infrastructure.data.datasync_provider import DataSyncExecution
     from infrastructure.ecs.ecs_service_provider import EcsServiceManager
     from infrastructure.dns.ddns_provider import DynamicDnsUpdate
-
-    # Dynamic providers use raw boto3 (not pulumi_aws), so they can't read
-    # `aws:region` from Pulumi config. Resolve it once here and pass it
-    # explicitly into each dynamic resource that makes AWS API calls.
-    region = aws.get_region().region
 
     # Create infrastructure components
     vpc = VpcComponent("main", config)
@@ -72,7 +66,6 @@ def create_pulumi_program():
     s3_to_efs_execution = DataSyncExecution(
         "s3-to-efs-auto",
         task_arn=datasync.s3_to_efs_task.arn,
-        region=region,
         task_name="S3 to EFS (load world data)",
         run_on_create=True,   # Execute during 'pulumi up'
         run_on_delete=False,  # Skip during 'pulumi destroy'
@@ -84,7 +77,6 @@ def create_pulumi_program():
         "ecs-service-manager",
         cluster_name=ecs.cluster.name,
         service_name=ecs.service.name,
-        region=region,
         opts=pulumi.ResourceOptions(
             depends_on=[s3_to_efs_execution]  # Wait for data to be loaded
         )
@@ -107,7 +99,6 @@ def create_pulumi_program():
     efs_to_s3_execution = DataSyncExecution(
         "efs-to-s3-auto",
         task_arn=datasync.efs_to_s3_task.arn,
-        region=region,
         task_name="EFS to S3 (save world data)",
         run_on_create=False,  # Skip during 'pulumi up'
         run_on_delete=True,   # Execute during 'pulumi destroy'
@@ -251,9 +242,11 @@ async def tetracubed_start(current_user: str = Depends(get_current_user)):
         # These environment variable overrides are OPTIONAL (only for local testing)
         config_values = {}
 
-        # AWS region override (optional - ESC may already provide this)
-        if "AWS_DEFAULT_REGION" in os.environ:
-            stack.set_config("aws:region", auto.ConfigValue(os.environ["AWS_DEFAULT_REGION"]))
+        # AWS region override (optional). AWS_REGION is also read directly by
+        # boto3 inside the dynamic providers, so a single env var configures
+        # both the Pulumi AWS provider and the raw boto3 calls.
+        if "AWS_REGION" in os.environ:
+            stack.set_config("aws:region", auto.ConfigValue(os.environ["AWS_REGION"]))
 
         # Optional overrides for non-secret values (only if you want to override ESC)
         if "VPC_CIDR" in os.environ:
