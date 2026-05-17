@@ -14,11 +14,14 @@ class EcsServiceManagerProvider(ResourceProvider):
     - delete(): Sets desired count to 0, waits for tasks to stop
     """
 
-    def _get_public_ip(self, cluster_name: str, service_name: str) -> str:
+    def _get_public_ip(self, cluster_name: str, service_name: str, region: str) -> str:
         """Get the public IP of the running ECS task"""
         try:
-            ecs_client = boto3.client('ecs')
-            ec2_resource = boto3.resource('ec2')
+            # Region must be passed explicitly: boto3 cannot read Pulumi's
+            # `aws:region` config, so without this the call fails with
+            # NoRegionError.
+            ecs_client = boto3.client('ecs', region_name=region)
+            ec2_resource = boto3.resource('ec2', region_name=region)
 
             logger.info(f"Getting running task for service: {service_name}")
 
@@ -81,9 +84,10 @@ class EcsServiceManagerProvider(ResourceProvider):
         """
         cluster_name = props["cluster_name"]
         service_name = props["service_name"]
+        region = props["region"]
 
         try:
-            ecs_client = boto3.client('ecs')
+            ecs_client = boto3.client('ecs', region_name=region)
 
             logger.info(f"[CREATE] Starting ECS service: {service_name} in cluster: {cluster_name}")
 
@@ -110,7 +114,7 @@ class EcsServiceManagerProvider(ResourceProvider):
             logger.info(f"[CREATE] ✓ Service is stable")
 
             # Get public IP
-            public_ip = self._get_public_ip(cluster_name, service_name)
+            public_ip = self._get_public_ip(cluster_name, service_name, region)
 
             logger.info(f"[CREATE] ✓ ECS service started with public IP: {public_ip}")
 
@@ -119,6 +123,7 @@ class EcsServiceManagerProvider(ResourceProvider):
                 outs={
                     "cluster_name": cluster_name,
                     "service_name": service_name,
+                    "region": region,
                     "public_ip": public_ip,
                     "desired_count": 1,
                     "status": "RUNNING"
@@ -136,9 +141,10 @@ class EcsServiceManagerProvider(ResourceProvider):
         """
         cluster_name = props["cluster_name"]
         service_name = props["service_name"]
+        region = props["region"]
 
         try:
-            ecs_client = boto3.client('ecs')
+            ecs_client = boto3.client('ecs', region_name=region)
 
             logger.info(f"[DELETE] Stopping ECS service: {service_name} in cluster: {cluster_name}")
 
@@ -203,6 +209,7 @@ class EcsServiceManager(Resource):
         name: str,
         cluster_name: pulumi.Input[str],
         service_name: pulumi.Input[str],
+        region: pulumi.Input[str],
         opts: Optional[pulumi.ResourceOptions] = None
     ):
         super().__init__(
@@ -211,6 +218,7 @@ class EcsServiceManager(Resource):
             {
                 "cluster_name": cluster_name,
                 "service_name": service_name,
+                "region": region,
                 "public_ip": None,  # Will be populated by provider
                 "status": None,
                 "desired_count": None,

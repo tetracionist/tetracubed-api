@@ -50,12 +50,15 @@ class DataSyncExecutionProvider(ResourceProvider):
     - delete(): Runs during 'pulumi destroy' (e.g., EFS -> S3 to save data)
     """
 
-    def _execute_task(self, task_arn: str, task_name: str, operation: str) -> str:
+    def _execute_task(self, task_arn: str, task_name: str, operation: str, region: str) -> str:
         """Common logic to execute and wait for DataSync task"""
         try:
             # Create boto3 client - inherits credentials from environment
-            # If Pulumi is using OIDC, boto3 will use the same credentials
-            datasync_client = boto3.client('datasync')
+            # If Pulumi is using OIDC, boto3 will use the same credentials.
+            # Region must be passed explicitly: boto3 cannot read Pulumi's
+            # `aws:region` config, so without this the call fails with
+            # NoRegionError even when the Pulumi AWS provider is configured.
+            datasync_client = boto3.client('datasync', region_name=region)
 
             logger.info(f"[{operation}] Starting DataSync task: {task_name}")
 
@@ -90,6 +93,7 @@ class DataSyncExecutionProvider(ResourceProvider):
         """
         task_arn = props["task_arn"]
         task_name = props.get("task_name", "datasync-task")
+        region = props["region"]
         run_on_create = props.get("run_on_create", True)
         run_on_delete = props.get("run_on_delete", False)
 
@@ -100,12 +104,13 @@ class DataSyncExecutionProvider(ResourceProvider):
                 outs={
                     "task_arn": task_arn,
                     "task_name": task_name,
+                    "region": region,
                     "run_on_delete": run_on_delete,  # Store for delete
                     "status": "SKIPPED"
                 }
             )
 
-        task_execution_arn = self._execute_task(task_arn, task_name, "CREATE")
+        task_execution_arn = self._execute_task(task_arn, task_name, "CREATE", region)
 
         return CreateResult(
             id_=task_execution_arn,
@@ -113,6 +118,7 @@ class DataSyncExecutionProvider(ResourceProvider):
                 "task_execution_arn": task_execution_arn,
                 "task_arn": task_arn,
                 "task_name": task_name,
+                "region": region,
                 "run_on_delete": run_on_delete,  # Store for delete
                 "status": "SUCCESS"
             }
@@ -127,6 +133,7 @@ class DataSyncExecutionProvider(ResourceProvider):
         # Check for both input and output property names
         task_arn = props.get("task_arn") or props.get("task_execution_arn")
         task_name = props.get("task_name", "datasync-task")
+        region = props.get("region")
         run_on_delete = props.get("run_on_delete", False)
 
         if not run_on_delete:
@@ -137,7 +144,7 @@ class DataSyncExecutionProvider(ResourceProvider):
             logger.warning(f"No task ARN found in props during delete, skipping execution")
             return
 
-        self._execute_task(task_arn, task_name, "DELETE")
+        self._execute_task(task_arn, task_name, "DELETE", region)
 
 
 class DataSyncExecution(Resource):
@@ -178,6 +185,7 @@ class DataSyncExecution(Resource):
         self,
         name: str,
         task_arn: pulumi.Input[str],
+        region: pulumi.Input[str],
         task_name: Optional[str] = None,
         run_on_create: bool = True,
         run_on_delete: bool = False,
@@ -189,6 +197,7 @@ class DataSyncExecution(Resource):
             {
                 "task_arn": task_arn,
                 "task_name": task_name or name,
+                "region": region,
                 "run_on_create": run_on_create,
                 "run_on_delete": run_on_delete,
                 "task_execution_arn": None,  # Will be populated by provider

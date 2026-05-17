@@ -44,6 +44,7 @@ class UserInDB(User):
 
 def create_pulumi_program():
     import pulumi
+    import pulumi_aws as aws
     import os
     from config.config import config
     from infrastructure.networking.vpc import VpcComponent
@@ -54,6 +55,11 @@ def create_pulumi_program():
     from infrastructure.data.datasync_provider import DataSyncExecution
     from infrastructure.ecs.ecs_service_provider import EcsServiceManager
     from infrastructure.dns.ddns_provider import DynamicDnsUpdate
+
+    # Dynamic providers use raw boto3 (not pulumi_aws), so they can't read
+    # `aws:region` from Pulumi config. Resolve it once here and pass it
+    # explicitly into each dynamic resource that makes AWS API calls.
+    region = aws.get_region().region
 
     # Create infrastructure components
     vpc = VpcComponent("main", config)
@@ -66,6 +72,7 @@ def create_pulumi_program():
     s3_to_efs_execution = DataSyncExecution(
         "s3-to-efs-auto",
         task_arn=datasync.s3_to_efs_task.arn,
+        region=region,
         task_name="S3 to EFS (load world data)",
         run_on_create=True,   # Execute during 'pulumi up'
         run_on_delete=False,  # Skip during 'pulumi destroy'
@@ -77,6 +84,7 @@ def create_pulumi_program():
         "ecs-service-manager",
         cluster_name=ecs.cluster.name,
         service_name=ecs.service.name,
+        region=region,
         opts=pulumi.ResourceOptions(
             depends_on=[s3_to_efs_execution]  # Wait for data to be loaded
         )
@@ -99,6 +107,7 @@ def create_pulumi_program():
     efs_to_s3_execution = DataSyncExecution(
         "efs-to-s3-auto",
         task_arn=datasync.efs_to_s3_task.arn,
+        region=region,
         task_name="EFS to S3 (save world data)",
         run_on_create=False,  # Skip during 'pulumi up'
         run_on_delete=True,   # Execute during 'pulumi destroy'
