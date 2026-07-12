@@ -10,6 +10,8 @@
 set -euo pipefail
 
 REPO_URL="https://github.com/tetracionist/tetracubed-api.git"
+REPO_SLUG="tetracionist/tetracubed-api"
+REF="${REF:-main}"          # branch/tag to fetch when falling back to a tarball
 APP_DIR="$HOME/tetracubed-api"
 SERVICE="tetracubed-api"
 
@@ -36,13 +38,20 @@ fi
 # --- Python 3.13 (uv-managed standalone build, no deadsnakes/sudo) ---------
 uv python install 3.13
 
-# --- Code ------------------------------------------------------------------
-if [ -d "$APP_DIR/.git" ]; then
-  echo "-> updating $APP_DIR"
-  git -C "$APP_DIR" pull --ff-only
+# --- Code (git if present, else a curl tarball — fresh boxes may lack git) --
+if command -v git >/dev/null 2>&1; then
+  if [ -d "$APP_DIR/.git" ]; then
+    echo "-> updating $APP_DIR (git)"
+    git -C "$APP_DIR" pull --ff-only
+  else
+    echo "-> cloning into $APP_DIR (git)"
+    git clone "$REPO_URL" "$APP_DIR"
+  fi
 else
-  echo "-> cloning into $APP_DIR"
-  git clone "$REPO_URL" "$APP_DIR"
+  echo "-> git not found; fetching '$REF' tarball into $APP_DIR (curl)"
+  mkdir -p "$APP_DIR"
+  curl -fsSL "https://github.com/$REPO_SLUG/archive/refs/heads/$REF.tar.gz" \
+    | tar xz --strip-components=1 -C "$APP_DIR"
 fi
 cd "$APP_DIR"
 chmod +x deploy/run.sh
