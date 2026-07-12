@@ -58,16 +58,23 @@ jobs:
             "AWS_REGION=$AWS_REGION" | \
             ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "cat > $REMOTE_DIR/.env"
 
-          # Install systemd unit (in case it changed), sync deps, restart.
+          # Refresh the --user unit if it changed, sync deps, restart.
+          # No sudo: everything runs under the deploy user's own systemd instance
+          # (requires `loginctl enable-linger <user>` to have been set up once).
           ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "
             set -e
+            export XDG_RUNTIME_DIR=/run/user/\$(id -u)
+            export PATH=\$HOME/.local/bin:\$HOME/.pulumi/bin:\$PATH
             cd $REMOTE_DIR
-            if ! cmp -s tetracubed-api.service /etc/systemd/system/tetracubed-api.service 2>/dev/null; then
-              sudo cp tetracubed-api.service /etc/systemd/system/tetracubed-api.service
-              sudo systemctl daemon-reload
+            chmod +x deploy/run.sh
+            mkdir -p \$HOME/.config/systemd/user
+            if ! cmp -s deploy/tetracubed-api.service \$HOME/.config/systemd/user/tetracubed-api.service 2>/dev/null; then
+              cp deploy/tetracubed-api.service \$HOME/.config/systemd/user/tetracubed-api.service
+              systemctl --user daemon-reload
             fi
-            /home/ubuntu/.local/bin/uv sync --frozen
-            sudo systemctl restart tetracubed-api
+            uv sync --frozen
+            systemctl --user enable tetracubed-api
+            systemctl --user restart tetracubed-api
           "
 
       - name: Show startup logs
@@ -81,4 +88,4 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
           ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" \
-            "sudo journalctl -u tetracubed-api --since '6 minutes ago' --no-pager"
+            "XDG_RUNTIME_DIR=/run/user/\$(id -u) journalctl --user -u tetracubed-api --since '6 minutes ago' --no-pager"
